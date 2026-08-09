@@ -10,6 +10,16 @@ cd arnis
 cp src/main.rs src/lib.rs
 sed -i 's/^fn main()/pub fn run()/' src/lib.rs
 python3 -c "open('src/main.rs','w').write('fn main() {\n    arnis::run();\n}\n')"
+# 给 lib.rs 的 run() 加 Tauri mobile entry point（Tauri 2 Android 必需）
+python3 << 'PYEOF'
+content = open('src/lib.rs').read()
+if '#[cfg_attr(mobile, tauri::mobile_entry_point)]' not in content:
+    content = content.replace('pub fn run()', '#[cfg_attr(mobile, tauri::mobile_entry_point)]\npub fn run()', 1)
+    open('src/lib.rs', 'w').write(content)
+    print('lib.rs: run() 已添加 mobile entry point')
+else:
+    print('lib.rs: mobile entry point 已存在，跳过')
+PYEOF
 
 # ========== 2. rfd 适配 ==========
 python3 << 'PYEOF'
