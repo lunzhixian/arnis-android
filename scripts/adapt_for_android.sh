@@ -36,6 +36,11 @@ if 'cfg(not(target_os = "android"))' not in t:
     t += '\n[target.\'cfg(not(target_os = "android"))\'.dependencies]\nrfd = { version = "0.17.2", optional = true }\n'
     print('Cargo.toml: rfd 移到非 Android target')
 
+# 添加 [lib] 块（Tauri Android 需要 staticlib/cdylib 产物 libarnis.so）
+if '[lib]' not in t:
+    t += '\n[lib]\nname = "arnis"\ncrate-type = ["staticlib", "cdylib", "rlib"]\n'
+    print('Cargo.toml: 添加 [lib] crate-type = staticlib/cdylib/rlib')
+
 with open('Cargo.toml', 'w') as f:
     f.write(t)
 
