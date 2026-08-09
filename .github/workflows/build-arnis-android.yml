@@ -1,0 +1,96 @@
+name: Build Arnis Android APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/build-arnis-android.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+    env:
+      CARGO_BUILD_JOBS: 2
+    steps:
+      - name: Clone Arnis source
+        run: |
+          git clone --depth 1 https://github.com/louis-e/arnis.git arnis
+          ls arnis | head
+
+      - name: Install Rust Android target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Check preinstalled Android SDK / NDK
+        run: |
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          ls "$ANDROID_HOME" 2>/dev/null || true
+          ls "$ANDROID_HOME/ndk" 2>/dev/null || echo "no ndk yet"
+
+      - name: Install Android NDK 27
+        run: |
+          echo "y" | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;27.0.12077973" "platform-tools"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.0.12077973" >> "$GITHUB_ENV"
+
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli --version "^2.0" --locked
+
+      # Tauri Android 要求 lib target，Arnis 是纯 bin 项目，这里做适配：
+      # src/main.rs -> src/lib.rs (fn main -> pub fn run)，再生成调用它的 main.rs
+      - name: Adapt source for Android (add lib target)
+        run: |
+          cd arnis
+          cp src/main.rs src/lib.rs
+          sed -i 's/^fn main()/pub fn run()/' src/lib.rs
+          cat > src/main.rs <<'EOF'
+fn main() {
+    arnis::run();
+}
+EOF
+          echo "=== lib.rs 里 run 定义 ==="
+          grep -n "pub fn run" src/lib.rs
+          echo "=== 新 main.rs ==="
+          cat src/main.rs
+
+      - name: Fetch dependencies
+        working-directory: arnis
+        run: cargo fetch --locked
+
+      - name: Init Android project
+        working-directory: arnis
+        run: cargo tauri android init
+
+      - name: Build APK (aarch64)
+        working-directory: arnis
+        run: cargo tauri android build --apk --target aarch64
+
+      - name: Locate APK
+        working-directory: arnis
+        run: find . -name "*.apk" -type f -exec ls -lh {} \;
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: arnis-android-apk
+          path: arnis/src-tauri/gen/android/app/build/outputs/apk/**/*.apk
+          retention-days: 30
+
+      - name: Create or update Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="arnis-android-v3.0.0"
+          APK=$(find arnis -name "*.apk" -type f | head -1)
+          echo "APK: $APK"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release upload "$TAG" "$APK" --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$TAG" "$APK" --repo "$GITHUB_REPOSITORY" \
+              --title "Arnis Android v3.0.0" \
+              --notes "Arnis - Generate real life cities in Minecraft（Android 版 APK）"
+          fi
