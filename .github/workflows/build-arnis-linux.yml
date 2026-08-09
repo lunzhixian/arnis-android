@@ -18,6 +18,7 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 jobs:
   build-linux:
@@ -94,3 +95,13 @@ jobs:
               --title "Arnis Linux Desktop $TAG" \
               --notes "Arnis v3.0.0 Linux x86_64 桌面版（AppImage + 二进制 tar.gz）"
           fi
+
+      # 构建成功后自动串联触发 Android APK 构建（避免并行占用配额）
+      - name: Chain-trigger Android APK build
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "Linux build OK, triggering Android APK build..."
+          gh workflow run "build-arnis-android.yml" --repo "$GITHUB_REPOSITORY" --ref main
+          echo "Android build triggered."
