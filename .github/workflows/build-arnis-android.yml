@@ -40,21 +40,9 @@ jobs:
       - name: Install Tauri CLI
         run: cargo install tauri-cli --version "^2.0" --locked
 
-      # Tauri Android 要求 lib target，Arnis 是纯 bin 项目，这里做适配：
-      # src/main.rs -> src/lib.rs (fn main -> pub fn run)，再生成调用它的 main.rs
+      # Tauri Android 要求 lib target，Arnis 是纯 bin 项目，用脚本做适配
       - name: Adapt source for Android (add lib target)
-        run: |
-          cd arnis
-          cp src/main.rs src/lib.rs
-          sed -i 's/^fn main()/pub fn run()/' src/lib.rs
-          python3 -c "open('src/main.rs','w').write('fn main() {
-    arnis::run();
-}
-')"
-          echo "=== lib.rs 里 run 定义 ==="
-          grep -n "pub fn run" src/lib.rs
-          echo "=== 新 main.rs ==="
-          cat src/main.rs
+        run: bash scripts/adapt_for_android.sh
 
       - name: Fetch dependencies
         working-directory: arnis
