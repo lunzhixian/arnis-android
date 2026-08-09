@@ -47,11 +47,10 @@ jobs:
           cd arnis
           cp src/main.rs src/lib.rs
           sed -i 's/^fn main()/pub fn run()/' src/lib.rs
-          cat > src/main.rs <<'EOF'
-fn main() {
+          python3 -c "open('src/main.rs','w').write('fn main() {
     arnis::run();
 }
-EOF
+')"
           echo "=== lib.rs 里 run 定义 ==="
           grep -n "pub fn run" src/lib.rs
           echo "=== 新 main.rs ==="
