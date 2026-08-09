@@ -1,4 +1,4 @@
-name: Build Arnis Linux Desktop
+name: Build Arnis Android APK
 
 on:
   workflow_dispatch:
@@ -14,71 +14,70 @@ on:
       release_tag:
         description: 'Release 标签（publish_release=true 时使用）'
         required: false
-        default: 'arnis-desktop-v3.0.0'
+        default: 'arnis-android-v3.0.0'
 
 permissions:
   contents: write
 
 jobs:
-  build-linux:
-    runs-on: ubuntu-22.04
-    timeout-minutes: 120
+  build-android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
     env:
-      CARGO_BUILD_JOBS: 4
-      APPIMAGE_EXTRACT_AND_RUN: 1   # 避免 CI 上 FUSE 依赖
+      CARGO_BUILD_JOBS: 2
     steps:
       - name: Checkout
         uses: actions/checkout@v7
-
-      - name: Install system deps (GTK / WebKitGTK)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libgtk-3-dev build-essential pkg-config libglib2.0-dev libsoup-3.0-dev libwebkit2gtk-4.1-dev
-          echo "PKG_CONFIG_PATH=/usr/lib/x86_64-linux-gnu/pkgconfig" >> "$GITHUB_ENV"
 
       - name: Clone Arnis source (upstream)
         run: |
           git clone --depth 1 https://github.com/louis-e/arnis.git arnis
           echo "Arnis version: $(grep '^version' arnis/Cargo.toml | head -1)"
 
-      - name: Install Rust toolchain
+      - name: Install Rust toolchain + Android target
         uses: dtolnay/rust-toolchain@v1
         with:
           toolchain: stable
-          targets: x86_64-unknown-linux-gnu
+          targets: aarch64-linux-android
 
       - name: Cargo cache
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: arnis
 
+      - name: Install Android NDK
+        run: |
+          echo "y" | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;27.0.12077973" "platform-tools"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.0.12077973" >> "$GITHUB_ENV"
+
       - name: Install Tauri CLI
         run: cargo install tauri-cli --version "^2.0" --locked
+
+      # Tauri Android 需要 lib target + rfd 在 Android 无实现，用脚本适配（桌面平台不受影响）
+      - name: Adapt source for Android (lib target + rfd)
+        run: bash scripts/adapt_for_android.sh
 
       - name: Fetch dependencies
         working-directory: arnis
         run: cargo fetch --locked
 
-      - name: Build AppImage bundle
+      - name: Init Android project
         working-directory: arnis
-        run: cargo tauri build --target x86_64-unknown-linux-gnu --bundles appimage
+        run: cargo tauri android init
 
-      - name: Package artifacts
-        run: |
-          mkdir -p dist
-          cp arnis/target/x86_64-unknown-linux-gnu/release/arnis dist/arnis-linux
-          chmod +x dist/arnis-linux
-          tar -czf dist/arnis-linux.tar.gz -C dist arnis-linux
-          cp arnis/target/x86_64-unknown-linux-gnu/release/bundle/appimage/*.AppImage dist/arnis-linux.AppImage
-          chmod +x dist/arnis-linux.AppImage
-          sha256sum dist/* | tee dist/SHA256SUMS
-          ls -lh dist/
+      - name: Build APK (aarch64)
+        working-directory: arnis
+        run: cargo tauri android build --apk --target aarch64
 
-      - name: Upload build artifacts
+      - name: Locate APK
+        working-directory: arnis
+        run: find . -name "*.apk" -type f -exec ls -lh {} \;
+
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v7
         with:
-          name: arnis-linux-desktop
-          path: dist/
+          name: arnis-android-apk
+          path: arnis/src-tauri/gen/android/app/build/outputs/apk/**/*.apk
           retention-days: 30
 
       - name: Publish GitHub Release (optional)
@@ -87,10 +86,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="${{ github.event.inputs.release_tag }}"
+          APK=$(find arnis -name "*.apk" -type f | head -1)
+          echo "APK: $APK"
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --clobber
+            gh release upload "$TAG" "$APK" --repo "$GITHUB_REPOSITORY" --clobber
           else
-            gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" \
-              --title "Arnis Linux Desktop $TAG" \
-              --notes "Arnis v3.0.0 Linux x86_64 桌面版（AppImage + 二进制 tar.gz）"
+            gh release create "$TAG" "$APK" --repo "$GITHUB_REPOSITORY" \
+              --title "Arnis Android v3.0.0" \
+              --notes "Arnis - Generate real life cities in Minecraft（Android 版 APK）"
           fi
