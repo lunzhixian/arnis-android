@@ -120,11 +120,16 @@ for i, l in enumerate(gr.split('\n'), 1):
         print(f'  {i}: {l.strip()}')
 PYEOF
 
-# ========== 3. Tauri pattern 适配（Android 前端资源打包）==========
-# Arnis 的 tauri.conf.json 没有 pattern 配置，Tauri 2 默认使用 brownfield：
-# 移动端 brownfield 不会把 frontendDist(src/gui) 打包进 APK，
-# 导致 WebView 启动时加载不到 index.html -> 闪退。
-# 显式设置 app.security.pattern = {"use": "global"}，让 Tauri 自动打包前端资源。
+# ========== 3. 前端资源打包策略（不修改 pattern！）==========
+# 源码核实结论（tauri-apps/tauri 2026-08-10）：
+#   * Tauri 2 的 app.security.pattern 只有 brownfield / isolation 两种取值，
+#     没有 "global"。设置 {"use":"global"} 会导致 `tauri android init`
+#     schema 校验失败（Error: "global" is not valid under oneOf）。
+#   * Tauri CLI 移动端 build 不会自动把 frontendDist(src/gui) 打包进 APK
+#     assets（crates/tauri-cli/src/mobile/android/mod.rs 的 inject_resources
+#     为未调用死代码）。前端资源由 workflow 的
+#     "Copy frontend assets into Android project (fallback)" 步骤显式拷贝。
+#   * 因此这里保持默认 brownfield 不变，只打印配置信息供排查。
 python3 << 'PYEOF'
 import json, re
 
@@ -133,40 +138,18 @@ with open('tauri.conf.json') as f:
 
 data = None
 try:
-    data = json.loads(raw)  # 纯 JSON 直接解析
+    data = json.loads(raw)
 except Exception:
     pass
 
 if data is not None:
-    app = data.setdefault('app', {})
-    sec = app.setdefault('security', {})
-    sec['pattern'] = {'use': 'global'}
-    with open('tauri.conf.json', 'w') as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
-    print('tauri.conf.json: app.security.pattern 已显式设为 global（json 方式）')
+    pattern = data.get('app', {}).get('security', {}).get('pattern')
+    print('pattern 配置:', pattern if pattern else '未配置（默认 brownfield，合法）')
+    fd = data.get('build', {}).get('frontendDist')
+    print('frontendDist:', fd)
 else:
-    # JSONC 兜底（tauri 支持注释文件）：文本方式添加
-    if '"pattern"' not in raw:
-        if '"security"' in raw:
-            raw = raw.replace('"security": {', '"security": {"pattern": {"use": "global"}, ', 1)
-        else:
-            raw = raw.replace('"app": {', '"app": {"security": {"pattern": {"use": "global"}}, ', 1)
-        with open('tauri.conf.json', 'w') as f:
-            f.write(raw)
-        print('tauri.conf.json: 文本方式添加 pattern global')
-    else:
-        raw = raw.replace('"use": "brownfield"', '"use": "global"')
-        with open('tauri.conf.json', 'w') as f:
-            f.write(raw)
-        print('tauri.conf.json: 替换 pattern 为 global')
-
-# 验证
-with open('tauri.conf.json') as f:
-    raw2 = f.read()
-m = re.search(r'"pattern"\s*:\s*\{[^}]*"use"\s*:\s*"([^"]+)"', raw2)
-print('当前 pattern use:', m.group(1) if m else '未找到')
-m2 = re.search(r'"frontendDist"\s*:\s*"([^"]+)"', raw2)
-print('frontendDist:', m2.group(1) if m2 else '未找到')
+    m = re.search(r'"pattern"\s*:\s*\{[^}]*"use"\s*:\s*"([^"]+)"', raw)
+    print('pattern use:', m.group(1) if m else '未配置（默认 brownfield，合法）')
+    m2 = re.search(r'"frontendDist"\s*:\s*"([^"]+)"', raw)
+    print('frontendDist:', m2.group(1) if m2 else '未找到')
 PYEOF
-
-echo "=== 适配完成 ==="

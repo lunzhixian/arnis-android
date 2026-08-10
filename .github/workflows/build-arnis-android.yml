@@ -65,21 +65,46 @@ jobs:
         working-directory: arnis
         run: cargo tauri android init
 
-      # 兜底：无论 Tauri 是否自动打包前端，都显式把 src/gui 拷进 Android assets，
-      # 确保 WebView 能加载到 index.html（brownfield 默认模式下 Tauri 移动端不拷前端）
+      # 兜底：Tauri CLI 移动端 build 不会自动把 frontendDist(src/gui) 打包进
+      # APK assets（源码核实：inject_resources 是未调用的死代码），必须显式拷贝。
+      # 双路径拷贝：assets 根（tauri.localhost 直读）和 assets/src/gui（frontendDist 前缀），
+      # 无论运行时按哪种路径加载都能命中。
       - name: Copy frontend assets into Android project (fallback)
         working-directory: arnis
         run: |
           mkdir -p gen/android/app/src/main/assets
           cp -r src/gui/. gen/android/app/src/main/assets/
+          mkdir -p gen/android/app/src/main/assets/src
+          cp -r src/gui gen/android/app/src/main/assets/src/
           echo "=== assets 顶层内容 ==="
           ls -la gen/android/app/src/main/assets/ | head -25
-          echo "=== index.html 检查 ==="
-          find gen/android/app/src/main/assets -maxdepth 1 -name "*.html" -exec ls -lh {} \;
+          echo "=== index.html 检查（两个路径） ==="
+          ls -lh gen/android/app/src/main/assets/index.html
+          ls -lh gen/android/app/src/main/assets/src/gui/index.html
 
       - name: Build APK (aarch64)
         working-directory: arnis
         run: cargo tauri android build --apk --target aarch64
+
+      # 构建后立即验证 APK 里确实含前端资源（避免又产出闪退包）
+      - name: Verify APK contains frontend assets
+        working-directory: arnis
+        run: |
+          set -e
+          APK=$(find gen/android/app/build/outputs/apk -name "*.apk" | head -1)
+          echo "APK: $APK ($(du -h "$APK" | cut -f1))"
+          echo "=== APK assets 内容 ==="
+          unzip -l "$APK" | grep -E "assets/(index\.html|src/gui/index\.html|tauri\.conf\.json)" || true
+          echo "=== index.html 校验 ==="
+          if unzip -l "$APK" | grep -q "assets/index.html"; then
+            echo "OK: assets/index.html 存在"
+          else
+            echo "FAIL: assets/index.html 缺失"
+            exit 1
+          fi
+          echo "=== so 库校验 ==="
+          unzip -l "$APK" | grep "lib/arm64-v8a/libarnis.so" || { echo "FAIL: libarnis.so 缺失"; exit 1; }
+          echo "=== 校验通过 ==="
 
       # Arnis 的 tauri 配置在仓库根目录（非 src-tauri/），产物路径为 arnis/gen/android/...
       - name: Sign APK (debug keystore)
