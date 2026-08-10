@@ -69,15 +69,30 @@ jobs:
         working-directory: arnis
         run: cargo tauri android build --apk --target aarch64
 
-      - name: Locate APK
+      # Arnis 的 tauri 配置在仓库根目录（非 src-tauri/），产物路径为 arnis/gen/android/...
+      - name: Sign APK (debug keystore)
         working-directory: arnis
-        run: find . -name "*.apk" -type f -exec ls -lh {} \;
+        run: |
+          set -e
+          APK=$(find gen/android/app/build/outputs/apk -name "*.apk" | head -1)
+          echo "Source APK: $APK"
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -V | tail -1)
+          echo "apksigner: $APKSIGNER"
+          KS="$HOME/.android/debug.keystore"
+          if [ ! -f "$KS" ]; then
+            keytool -genkeypair -v -keystore "$KS" -storepass android -alias androiddebugkey \
+              -keypass android -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US" >/dev/null 2>&1
+          fi
+          "$APKSIGNER" sign --ks "$KS" --ks-pass pass:android --key-pass pass:android \
+            --out arnis-android-v3.0.0.apk "$APK"
+          ls -lh arnis-android-v3.0.0.apk
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v7
         with:
           name: arnis-android-apk
-          path: arnis/src-tauri/gen/android/app/build/outputs/apk/**/*.apk
+          path: arnis/arnis-android-v3.0.0.apk
           retention-days: 30
 
       - name: Publish GitHub Release (optional)
@@ -86,12 +101,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="${{ github.event.inputs.release_tag }}"
-          APK=$(find arnis -name "*.apk" -type f | head -1)
-          echo "APK: $APK"
+          APK="arnis/arnis-android-v3.0.0.apk"
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release upload "$TAG" "$APK" --repo "$GITHUB_REPOSITORY" --clobber
           else
             gh release create "$TAG" "$APK" --repo "$GITHUB_REPOSITORY" \
               --title "Arnis Android v3.0.0" \
-              --notes "Arnis - Generate real life cities in Minecraft（Android 版 APK）"
+              --notes "Arnis - Generate real life cities in Minecraft（Android 版 APK，debug 签名）"
           fi
