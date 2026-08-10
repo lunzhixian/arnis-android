@@ -12,14 +12,51 @@ cp src/main.rs src/lib.rs
 sed -i 's/^fn main()/pub fn run()/' src/lib.rs
 python3 -c "open('src/main.rs','w').write('fn main() {\n    arnis::run();\n}\n')"
 # 给 lib.rs 的 run() 加 Tauri mobile entry point（Tauri 2 Android 必需）
+# 并打 Android 入口补丁：Android 进程由 JNI 拉起、无命令行参数，
+# 原 main() 逻辑 `args.len() == 1` 在 Android 上恒为 false → 直接进入
+# run_cli() → clap 解析必需参数 --bbox 失败 → exit(2) 启动即闪退。
+# 修复：Android 上直接启动 GUI 并 return，跳过全部 CLI 逻辑。
 python3 << 'PYEOF'
 content = open('src/lib.rs').read()
 if '#[cfg_attr(mobile, tauri::mobile_entry_point)]' not in content:
     content = content.replace('pub fn run()', '#[cfg_attr(mobile, tauri::mobile_entry_point)]\npub fn run()', 1)
-    open('src/lib.rs', 'w').write(content)
     print('lib.rs: run() 已添加 mobile entry point')
 else:
     print('lib.rs: mobile entry point 已存在，跳过')
+
+# ===== Android 入口补丁 =====
+old_block = '''    #[cfg(feature = "gui")]
+    {
+        let gui_mode = std::env::args().len() == 1; // Just "arnis" with no args
+        if gui_mode {
+            gui::run_gui();
+        }
+    }'''
+
+new_block = '''    // Android: 进程由 JNI 拉起，无命令行参数。直接启动 GUI 并返回，
+    // 绝不进入 run_cli() 的 clap 解析（--bbox 缺失会导致 exit(2) 闪退）。
+    #[cfg(target_os = "android")]
+    {
+        gui::run_gui();
+        return;
+    }
+
+    #[cfg(feature = "gui")]
+    {
+        let gui_mode = std::env::args().len() == 1; // Just "arnis" with no args
+        if gui_mode {
+            gui::run_gui();
+            return;
+        }
+    }'''
+
+if old_block in content:
+    content = content.replace(old_block, new_block, 1)
+    print('lib.rs: Android 入口补丁已应用（Android 直接 GUI，跳过 CLI）')
+else:
+    print('WARN: lib.rs 未匹配到 gui_mode 代码块，Android 入口补丁未应用！')
+
+open('src/lib.rs', 'w').write(content)
 PYEOF
 
 # ========== 2. rfd 适配 ==========
