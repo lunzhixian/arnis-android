@@ -148,11 +148,9 @@ else:
     # JSONC 兜底（tauri 支持注释文件）：文本方式添加
     if '"pattern"' not in raw:
         if '"security"' in raw:
-            raw = raw.replace('"security": {', '"security": {
-    "pattern": { "use": "global" },', 1)
+            raw = raw.replace('"security": {', '"security": {"pattern": {"use": "global"}, ', 1)
         else:
-            raw = raw.replace('"app": {', '"app": {
-    "security": { "pattern": { "use": "global" } },', 1)
+            raw = raw.replace('"app": {', '"app": {"security": {"pattern": {"use": "global"}}, ', 1)
         with open('tauri.conf.json', 'w') as f:
             f.write(raw)
         print('tauri.conf.json: 文本方式添加 pattern global')
