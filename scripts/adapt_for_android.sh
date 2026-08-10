@@ -121,28 +121,54 @@ for i, l in enumerate(gr.split('\n'), 1):
 PYEOF
 
 # ========== 3. Tauri pattern 适配（Android 前端资源打包）==========
-# Arnis 的 tauri.conf.json 使用 brownfield pattern：桌面可用（直连页面），
-# 但 Tauri 移动端 brownfield 不会把 frontendDist(src/gui) 打包进 APK，
-# 导致 WebView 启动时加载不到 index.html -> 闪退。改为 global pattern。
+# Arnis 的 tauri.conf.json 没有 pattern 配置，Tauri 2 默认使用 brownfield：
+# 移动端 brownfield 不会把 frontendDist(src/gui) 打包进 APK，
+# 导致 WebView 启动时加载不到 index.html -> 闪退。
+# 显式设置 app.security.pattern = {"use": "global"}，让 Tauri 自动打包前端资源。
 python3 << 'PYEOF'
+import json, re
+
 with open('tauri.conf.json') as f:
     raw = f.read()
 
-if '"use": "brownfield"' in raw:
-    new_raw = raw.replace('"use": "brownfield"', '"use": "global"')
+data = None
+try:
+    data = json.loads(raw)  # 纯 JSON 直接解析
+except Exception:
+    pass
+
+if data is not None:
+    app = data.setdefault('app', {})
+    sec = app.setdefault('security', {})
+    sec['pattern'] = {'use': 'global'}
     with open('tauri.conf.json', 'w') as f:
-        f.write(new_raw)
-    print('tauri.conf.json: pattern use brownfield -> global（前端资源将打包进 APK）')
+        json.dump(data, f, indent=2, ensure_ascii=False)
+    print('tauri.conf.json: app.security.pattern 已显式设为 global（json 方式）')
 else:
-    print('WARN: tauri.conf.json 未找到 "use": "brownfield"，跳过 pattern 修改')
+    # JSONC 兜底（tauri 支持注释文件）：文本方式添加
+    if '"pattern"' not in raw:
+        if '"security"' in raw:
+            raw = raw.replace('"security": {', '"security": {
+    "pattern": { "use": "global" },', 1)
+        else:
+            raw = raw.replace('"app": {', '"app": {
+    "security": { "pattern": { "use": "global" } },', 1)
+        with open('tauri.conf.json', 'w') as f:
+            f.write(raw)
+        print('tauri.conf.json: 文本方式添加 pattern global')
+    else:
+        raw = raw.replace('"use": "brownfield"', '"use": "global"')
+        with open('tauri.conf.json', 'w') as f:
+            f.write(raw)
+        print('tauri.conf.json: 替换 pattern 为 global')
 
 # 验证
-import json, re
 with open('tauri.conf.json') as f:
     raw2 = f.read()
 m = re.search(r'"pattern"\s*:\s*\{[^}]*"use"\s*:\s*"([^"]+)"', raw2)
 print('当前 pattern use:', m.group(1) if m else '未找到')
-print('frontendDist:', re.search(r'"frontendDist"\s*:\s*"([^"]+)"', raw2).group(1))
+m2 = re.search(r'"frontendDist"\s*:\s*"([^"]+)"', raw2)
+print('frontendDist:', m2.group(1) if m2 else '未找到')
 PYEOF
 
 echo "=== 适配完成 ==="

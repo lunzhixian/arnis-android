@@ -65,6 +65,18 @@ jobs:
         working-directory: arnis
         run: cargo tauri android init
 
+      # 兜底：无论 Tauri 是否自动打包前端，都显式把 src/gui 拷进 Android assets，
+      # 确保 WebView 能加载到 index.html（brownfield 默认模式下 Tauri 移动端不拷前端）
+      - name: Copy frontend assets into Android project (fallback)
+        working-directory: arnis
+        run: |
+          mkdir -p gen/android/app/src/main/assets
+          cp -r src/gui/. gen/android/app/src/main/assets/
+          echo "=== assets 顶层内容 ==="
+          ls -la gen/android/app/src/main/assets/ | head -25
+          echo "=== index.html 检查 ==="
+          find gen/android/app/src/main/assets -maxdepth 1 -name "*.html" -exec ls -lh {} \;
+
       - name: Build APK (aarch64)
         working-directory: arnis
         run: cargo tauri android build --apk --target aarch64
