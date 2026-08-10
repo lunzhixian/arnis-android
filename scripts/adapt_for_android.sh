@@ -2,6 +2,7 @@
 # 适配 Arnis 源码以支持 Tauri Android 构建
 # 1. 添加 lib target（Tauri Android 需要）
 # 2. 移除 rfd 文件对话框依赖（Android 不支持，改为直接返回路径）
+# 3. brownfield -> global pattern（否则移动端不打包前端资源，WebView 加载不到页面闪退）
 set -euo pipefail
 
 cd arnis
@@ -118,3 +119,30 @@ for i, l in enumerate(gr.split('\n'), 1):
     if 'rfd' in l or 'cfg(not(target_os' in l:
         print(f'  {i}: {l.strip()}')
 PYEOF
+
+# ========== 3. Tauri pattern 适配（Android 前端资源打包）==========
+# Arnis 的 tauri.conf.json 使用 brownfield pattern：桌面可用（直连页面），
+# 但 Tauri 移动端 brownfield 不会把 frontendDist(src/gui) 打包进 APK，
+# 导致 WebView 启动时加载不到 index.html -> 闪退。改为 global pattern。
+python3 << 'PYEOF'
+with open('tauri.conf.json') as f:
+    raw = f.read()
+
+if '"use": "brownfield"' in raw:
+    new_raw = raw.replace('"use": "brownfield"', '"use": "global"')
+    with open('tauri.conf.json', 'w') as f:
+        f.write(new_raw)
+    print('tauri.conf.json: pattern use brownfield -> global（前端资源将打包进 APK）')
+else:
+    print('WARN: tauri.conf.json 未找到 "use": "brownfield"，跳过 pattern 修改')
+
+# 验证
+import json, re
+with open('tauri.conf.json') as f:
+    raw2 = f.read()
+m = re.search(r'"pattern"\s*:\s*\{[^}]*"use"\s*:\s*"([^"]+)"', raw2)
+print('当前 pattern use:', m.group(1) if m else '未找到')
+print('frontendDist:', re.search(r'"frontendDist"\s*:\s*"([^"]+)"', raw2).group(1))
+PYEOF
+
+echo "=== 适配完成 ==="
