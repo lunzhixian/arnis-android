@@ -415,3 +415,112 @@ print('language.js 含 LOCALE_ALIASES:', 'LOCALE_ALIASES' in js2, '| 含 zh-CN �
 h2 = open('src/gui/maps.html').read()
 print('maps.html 含"搜索城市":', '搜索城市' in h2)
 PYEOF
+
+# ========== 5. 启动闪退自愈：禁用自动更新检查 ==========
+# 问题（tombstone 分析 2026-08-11）：
+#   JavaBridge 线程 SIGABRT = JS invoke 触发的 Rust panic 在 JNI 边界 abort。
+#   启动时唯一网络操作是 checkForUpdates -> gui_get_update_info ->
+#   reqwest::blocking::Client（version_check.rs），而 reqwest blocking 首次
+#   调用要在非主线程创建 tokio runtime（内部 .expect("failed to build
+#   reqwest runtime") 是 panic 点），且国内网络访问 api.github.com 不稳定
+#   （约 40s 卡顿窗口与 tombstone uptime 吻合）。
+#   修复双保险：Rust 侧 Android 直接返回"无更新"（零网络）；JS 侧启动
+#   不再自动调用 checkForUpdates（保留函数与手动入口）。
+python3 << 'PYEOF'
+import os
+
+# ---- 5.1 version_check.rs：Android 短路，跳过 reqwest/网络 ----
+p = 'src/version_check.rs'
+c = open(p).read()
+
+fn_start = 'pub fn check_for_updates() -> Result<UpdateInfo, Box<dyn Error>> {'
+fn_end_marker = '/// Fire-and-forget CLI update check; prints a one-line notice on a background thread.'
+assert fn_start in c, 'version_check.rs: check_for_updates 锚点未找到'
+assert fn_end_marker in c, 'version_check.rs: 函数结尾锚点未找到'
+i = c.index(fn_start)
+j = c.index(fn_end_marker)
+old_fn = c[i:j]
+
+new_fn = '''pub fn check_for_updates() -> Result<UpdateInfo, Box<dyn Error>> {
+    // Android: 不走任何网络逻辑。reqwest blocking 首次调用需在调用线程创建
+    // tokio runtime（内部 expect panic），且 api.github.com 在国内访问不稳定；
+    // 该命令由 JS 启动时自动调用，panic 会直接 abort 整个 App。这里直接返回
+    // "无更新"，让更新检查在 Android 上成为无害的空操作。
+    #[cfg(target_os = "android")]
+    {
+        let local_version = Version::parse(env!("CARGO_PKG_VERSION"))?;
+        return Ok(UpdateInfo {
+            is_newer: false,
+            local_version: local_version.to_string(),
+            remote_version: local_version.to_string(),
+            release: ReleaseInfo {
+                tag_name: format!("v{}", local_version),
+                name: String::new(),
+                body: String::new(),
+                html_url: String::new(),
+                published_at: String::new(),
+                assets: Vec::new(),
+            },
+        });
+    }
+
+    #[cfg(not(target_os = "android"))]
+    {
+        let release = fetch_latest_release()?;
+        let remote_str = release
+            .tag_name
+            .strip_prefix('v')
+            .unwrap_or(&release.tag_name);
+        let remote_version = Version::parse(remote_str)?;
+        let local_version = Version::parse(env!("CARGO_PKG_VERSION"))?;
+
+        Ok(UpdateInfo {
+            is_newer: remote_version > local_version,
+            local_version: local_version.to_string(),
+            remote_version: remote_version.to_string(),
+            release,
+        })
+    }
+}
+
+'''
+c = c[:i] + new_fn + c[j:]
+open(p, 'w').write(c)
+print('version_check.rs: check_for_updates 已加 Android 短路分支')
+
+# ---- 5.2 网络相关项在 Android 下标记 dead-code 豁免（避免 warning）----
+c = open(p).read()
+c = c.replace('const LATEST_RELEASE_API_URL: &str = "https://api.github.com/repos/louis-e/arnis/releases/latest";',
+              '#[cfg(not(target_os = "android"))]
+const LATEST_RELEASE_API_URL: &str = "https://api.github.com/repos/louis-e/arnis/releases/latest";')
+c = c.replace('use reqwest::blocking::Client;',
+              '#[cfg(not(target_os = "android"))]
+use reqwest::blocking::Client;')
+c = c.replace('fn build_client() -> reqwest::Result<Client> {',
+              '#[cfg(not(target_os = "android"))]
+fn build_client() -> reqwest::Result<Client> {')
+c = c.replace('pub fn fetch_latest_release() -> Result<ReleaseInfo, Box<dyn Error>> {',
+              '#[cfg(not(target_os = "android"))]
+pub fn fetch_latest_release() -> Result<ReleaseInfo, Box<dyn Error>> {')
+open(p, 'w').write(c)
+print('version_check.rs: 网络项已加 #[cfg(not(target_os = "android"))] 豁免')
+
+# ---- 5.3 main.js：启动时不再自动检查更新 ----
+p = 'src/gui/js/main.js'
+js = open(p).read()
+old = '  checkForUpdates();'
+assert old in js, 'main.js: checkForUpdates() 调用点未找到'
+js = js.replace(old, '  // checkForUpdates(); // Android 自愈：启动禁用自动更新检查（Rust 侧已短路返回无更新，函数与手动入口保留）', 1)
+open(p, 'w').write(js)
+print('main.js: 已禁用启动自动更新检查')
+
+# ---- 5.4 校验 ----
+print()
+print('=== 自愈补丁校验 ===')
+c = open('src/version_check.rs').read()
+print('check_for_updates 含 Android 短路:', 'target_os = "android"' in c)
+print('fetch_latest_release 有 cfg 豁免:', '#[cfg(not(target_os = "android"))]
+pub fn fetch_latest_release' in c)
+js = open('src/gui/js/main.js').read()
+print('main.js 启动不调 checkForUpdates:', '// checkForUpdates();' in js)
+PYEOF
