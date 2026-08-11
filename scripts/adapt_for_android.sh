@@ -1,10 +1,8 @@
 #!/usr/bin/env bash
 # 适配 Arnis 源码以支持 Tauri Android 构建
-# 1. 添加 lib target + mobile entry point + Android 入口补丁
-#    （Android 无 argv，跳过 clap CLI 解析，直接启动 GUI，防 exit(2) 启动闪退）
+# 1. 添加 lib target（Tauri Android 需要）
 # 2. 移除 rfd 文件对话框依赖（Android 不支持，改为直接返回路径）
-# 3. 前端资源打包：不修改 pattern（Tauri 2 没有 "global" 取值，只有 brownfield/isolation），
-#    由 workflow 的 Copy fallback 步骤手动把 src/gui 拷进 APK assets
+# 3. brownfield -> global pattern（否则移动端不打包前端资源，WebView 加载不到页面闪退）
 set -euo pipefail
 
 cd arnis
@@ -39,6 +37,37 @@ new_block = '''    // Android: 进程由 JNI 拉起，无命令行参数。直�
     // 绝不进入 run_cli() 的 clap 解析（--bbox 缺失会导致 exit(2) 闪退）。
     #[cfg(target_os = "android")]
     {
+        // 崩溃诊断 hook：把 panic 消息 + 位置写入 app 外部文件。
+        // tombstone 不含 panic 文本时，靠这个文件精确定位崩溃行。
+        let default_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            use std::io::Write;
+            default_hook(info); // 保留默认行为：打印到 stderr -> logcat RustStdoutStderr
+            let msg = format!(
+                "[{}] {}\n",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0),
+                info
+            );
+            for path in [
+                "/sdcard/Android/data/com.louisdev.arnis/files/arnis_panic.log",
+                "/data/data/com.louisdev.arnis/files/arnis_panic.log",
+            ] {
+                if let Some(parent) = std::path::Path::new(path).parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                if let Ok(mut f) = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(path)
+                {
+                    let _ = f.write_all(msg.as_bytes());
+                    break;
+                }
+            }
+        }));
         gui::run_gui();
         return;
     }
