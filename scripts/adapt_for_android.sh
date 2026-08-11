@@ -490,18 +490,15 @@ print('version_check.rs: check_for_updates 已加 Android 短路分支')
 
 # ---- 5.2 网络相关项在 Android 下标记 dead-code 豁免（避免 warning）----
 c = open(p).read()
+_NL = chr(10)
 c = c.replace('const LATEST_RELEASE_API_URL: &str = "https://api.github.com/repos/louis-e/arnis/releases/latest";',
-              '#[cfg(not(target_os = "android"))]
-const LATEST_RELEASE_API_URL: &str = "https://api.github.com/repos/louis-e/arnis/releases/latest";')
+              '#[cfg(not(target_os = "android"))]' + _NL + 'const LATEST_RELEASE_API_URL: &str = "https://api.github.com/repos/louis-e/arnis/releases/latest";')
 c = c.replace('use reqwest::blocking::Client;',
-              '#[cfg(not(target_os = "android"))]
-use reqwest::blocking::Client;')
+              '#[cfg(not(target_os = "android"))]' + _NL + 'use reqwest::blocking::Client;')
 c = c.replace('fn build_client() -> reqwest::Result<Client> {',
-              '#[cfg(not(target_os = "android"))]
-fn build_client() -> reqwest::Result<Client> {')
+              '#[cfg(not(target_os = "android"))]' + _NL + 'fn build_client() -> reqwest::Result<Client> {')
 c = c.replace('pub fn fetch_latest_release() -> Result<ReleaseInfo, Box<dyn Error>> {',
-              '#[cfg(not(target_os = "android"))]
-pub fn fetch_latest_release() -> Result<ReleaseInfo, Box<dyn Error>> {')
+              '#[cfg(not(target_os = "android"))]' + _NL + 'pub fn fetch_latest_release() -> Result<ReleaseInfo, Box<dyn Error>> {')
 open(p, 'w').write(c)
 print('version_check.rs: 网络项已加 #[cfg(not(target_os = "android"))] 豁免')
 
@@ -519,8 +516,7 @@ print()
 print('=== 自愈补丁校验 ===')
 c = open('src/version_check.rs').read()
 print('check_for_updates 含 Android 短路:', 'target_os = "android"' in c)
-print('fetch_latest_release 有 cfg 豁免:', '#[cfg(not(target_os = "android"))]
-pub fn fetch_latest_release' in c)
+print('fetch_latest_release 有 cfg 豁免:', '#[cfg(not(target_os = "android"))]' + _NL + 'pub fn fetch_latest_release' in c)
 js = open('src/gui/js/main.js').read()
 print('main.js 启动不调 checkForUpdates:', '// checkForUpdates();' in js)
 PYEOF
