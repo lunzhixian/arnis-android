@@ -327,3 +327,91 @@ else:
     m2 = re.search(r'"frontendDist"\s*:\s*"([^"]+)"', raw)
     print('frontendDist:', m2.group(1) if m2 else '未找到')
 PYEOF
+
+# ========== 4. 前端汉化适配（i18n 自动匹配修复）==========
+# 问题根因（源码核实 2026-08-11）：
+#   * src/gui 是纯静态前端，原生支持 i18n（locales/*.json），zh-CN.json 完整（81/81 键）。
+#   * 但 language.js 的 fetchLanguage 只按 navigator.language 精确匹配文件名：
+#     手机返回 "zh"（无地区后缀）→ 请求 locales/zh.json（不存在）→ 回退英文！
+#   * 修复：① 补发 locales/zh.json（=zh-CN.json）② language.js 加语言别名映射
+#     （zh→zh-CN 等）③ maps.html（Leaflet 地图页）静态英文控件汉化。
+python3 << 'PYEOF'
+import os, shutil
+
+# ---- 4.1 locales/zh.json = zh-CN.json（处理 navigator.language="zh"）----
+zh_cn = 'src/gui/locales/zh-CN.json'
+zh = 'src/gui/locales/zh.json'
+if os.path.exists(zh_cn) and not os.path.exists(zh):
+    shutil.copy(zh_cn, zh)
+    print('locales: 新增 zh.json（= zh-CN.json，修复 navigator.language=zh 回退英文）')
+elif os.path.exists(zh_cn):
+    print('locales: zh.json 已存在，跳过')
+
+# ---- 4.2 language.js：语言别名映射 ----
+p = 'src/gui/js/language.js'
+js = open(p).read()
+if 'LOCALE_ALIASES' not in js:
+    old = 'const DEFAULT_LOCALE_PATH = `./locales/en.json`;'
+    new = '''const DEFAULT_LOCALE_PATH = `./locales/en.json`;
+
+/**
+ * Normalizes browser language codes to the locale files actually shipped.
+ * Fixes e.g. navigator.language = "zh" (no region) silently falling back to English.
+ */
+const LOCALE_ALIASES = {
+  'zh': 'zh-CN',
+  'zh-Hans': 'zh-CN',
+  'zh-Hans-CN': 'zh-CN',
+  'uk': 'ua',
+  'pt': 'pt-BR',
+};'''
+    assert old in js, 'language.js 锚点未找到'
+    js = js.replace(old, new, 1)
+
+    old_fn = '''export async function fetchLanguage(languageCode) {
+
+    let response = await fetch(`./locales/${languageCode}.json`);'''
+    new_fn = '''export async function fetchLanguage(languageCode) {
+
+    // Normalize variant codes to shipped locale files
+    if (LOCALE_ALIASES[languageCode]) {
+        languageCode = LOCALE_ALIASES[languageCode];
+    }
+
+    let response = await fetch(`./locales/${languageCode}.json`);'''
+    assert old_fn in js, 'fetchLanguage 锚点未找到'
+    js = js.replace(old_fn, new_fn, 1)
+    open(p, 'w').write(js)
+    print('language.js: 已加入语言别名映射（zh→zh-CN, uk→ua, pt→pt-BR）')
+else:
+    print('language.js: 别名映射已存在，跳过')
+
+# ---- 4.3 maps.html：Leaflet 地图页静态控件汉化 ----
+p = 'src/gui/maps.html'
+h = open(p).read()
+repl = [
+    ('placeholder="Search for a city..."', 'placeholder="搜索城市..."'),
+    ('<button id="add">Add</button>', '<button id="add">添加</button>'),
+    ('<button id="clear">Clear</button>', '<button id="clear">清空</button>'),
+    ('<button id="cancel">Cancel</button>', '<button id="cancel">取消</button>'),
+]
+changed = 0
+for old, new in repl:
+    if old in h:
+        h = h.replace(old, new)
+        changed += 1
+if changed:
+    open(p, 'w').write(h)
+    print(f'maps.html: 汉化 {changed} 处静态控件文本')
+else:
+    print('maps.html: 无可汉化项（或已汉化）')
+
+# ---- 4.4 校验 ----
+print()
+print('=== 汉化校验 ===')
+print('zh.json 存在:', os.path.exists(zh), '| 大小:', os.path.getsize(zh) if os.path.exists(zh) else 0)
+js2 = open('src/gui/js/language.js').read()
+print('language.js 含 LOCALE_ALIASES:', 'LOCALE_ALIASES' in js2, '| 含 zh-CN 映射:', "'zh': 'zh-CN'" in js2)
+h2 = open('src/gui/maps.html').read()
+print('maps.html 含"搜索城市":', '搜索城市' in h2)
+PYEOF
