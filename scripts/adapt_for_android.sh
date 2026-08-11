@@ -37,6 +37,38 @@ new_block = '''    // Android: 进程由 JNI 拉起，无命令行参数。直�
     // 绝不进入 run_cli() 的 clap 解析（--bbox 缺失会导致 exit(2) 闪退）。
     #[cfg(target_os = "android")]
     {
+        // ==== 启动阶段诊断：boot_stages.log（外部存储，文件管理器可直接查看）====
+        macro_rules! boot_log {
+            ($msg:expr) => {{
+                use std::io::Write as _;
+                let line = format!(
+                    "[{}] {}\n",
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0),
+                    $msg
+                );
+                for _p in [
+                    "/sdcard/Android/data/com.louisdev.arnis/files/boot_stages.log",
+                    "/data/data/com.louisdev.arnis/files/boot_stages.log",
+                ] {
+                    if let Some(parent) = std::path::Path::new(_p).parent() {
+                        let _ = std::fs::create_dir_all(parent);
+                    }
+                    if let Ok(mut f) = std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(_p)
+                    {
+                        let _ = f.write_all(line.as_bytes());
+                        break;
+                    }
+                }
+            }};
+        }
+        boot_log!("BOOT_START");
+
         // 崩溃诊断 hook：把 panic 消息 + 位置写入 app 外部文件。
         // tombstone 不含 panic 文本时，靠这个文件精确定位崩溃行。
         let default_hook = std::panic::take_hook();
@@ -68,7 +100,9 @@ new_block = '''    // Android: 进程由 JNI 拉起，无命令行参数。直�
                 }
             }
         }));
+        boot_log!("BEFORE_RUN_GUI");
         gui::run_gui();
+        boot_log!("AFTER_RUN_GUI_RETURNED");
         return;
     }
 
@@ -173,6 +207,78 @@ else:
 
 with open('src/gui.rs', 'w') as f:
     f.write(g2)
+
+# ---- 诊断增强（Android 崩溃定位）----
+with open('src/gui.rs') as f:
+    g3 = f.read()
+
+# 1) Android 不安装 telemetry panic hook：它会覆盖 adapt 脚本设置的诊断 hook
+#    （诊断 hook 会把 panic 写进 arnis_panic.log）
+old_ph = '''    // Install panic hook for crash reporting
+    telemetry::install_panic_hook();'''
+new_ph = '''    // Install panic hook for crash reporting
+    // Android: 跳过 telemetry hook，避免覆盖诊断 hook（arnis_panic.log 落盘）
+    #[cfg(not(target_os = "android"))]
+    telemetry::install_panic_hook();'''
+if old_ph in g3:
+    g3 = g3.replace(old_ph, new_ph, 1)
+    print('gui.rs: Android 跳过 telemetry panic hook（诊断 hook 保留）')
+else:
+    print('WARN: gui.rs telemetry::install_panic_hook 未匹配')
+
+# 2) setup：Android 上窗口获取失败写日志而非 panic
+old_setup = '''        .setup(|app| {
+            let app_handle = app.handle();
+            let main_window = tauri::Manager::get_webview_window(app_handle, "main")
+                .expect("Failed to get main window");
+            progress::set_main_window(main_window);
+            Ok(())
+        })'''
+new_setup = '''        .setup(|app| {
+            let app_handle = app.handle();
+            #[cfg(target_os = "android")]
+            {
+                // 诊断：窗口获取结果写入 boot_stages.log，失败不 panic
+                let log_line = |msg: &str| {
+                    use std::io::Write as _;
+                    let _ = std::fs::OpenOptions::new().create(true).append(true).open(
+                        "/sdcard/Android/data/com.louisdev.arnis/files/boot_stages.log",
+                    ).and_then(|mut f| {
+                        writeln!(
+                            f,
+                            "[{}] {}",
+                            std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .map(|d| d.as_secs())
+                                .unwrap_or(0),
+                            msg
+                        )
+                    });
+                };
+                match tauri::Manager::get_webview_window(app_handle, "main") {
+                    Some(w) => {
+                        progress::set_main_window(w);
+                        log_line("SETUP_WINDOW_OK");
+                    }
+                    None => log_line("SETUP_WINDOW_FAIL"),
+                }
+            }
+            #[cfg(not(target_os = "android"))]
+            {
+                let main_window = tauri::Manager::get_webview_window(app_handle, "main")
+                    .expect("Failed to get main window");
+                progress::set_main_window(main_window);
+            }
+            Ok(())
+        })'''
+if old_setup in g3:
+    g3 = g3.replace(old_setup, new_setup, 1)
+    print('gui.rs: setup 窗口获取已改 Android 写日志模式')
+else:
+    print('WARN: gui.rs setup 块未匹配（可能上游代码已变）')
+
+with open('src/gui.rs', 'w') as f:
+    f.write(g3)
 
 # ---- 验证 ----
 print()
