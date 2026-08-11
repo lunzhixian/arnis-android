@@ -653,3 +653,98 @@ print('bbox.js 残留 Stadia:', 'stadiamaps.com' in b2)
 h2 = open('src/gui/index.html').read()
 print('index.html 含"标准地图（高德）":', '标准地图（高德）' in h2)
 PYEOF
+
+
+# ========== 7. 生成崩溃自愈（spawn_blocking 内网络线程 panic 不再 abort）==========
+# 问题（用户实测 + 源码审查 2026-08-11）：
+#   * 点击"开始生成"后报 "Error in blocking task: task N panicked"（tokio
+#     JoinError 文案），Java 版"无法生成世界"，且 App 进程最终被杀。
+#   * 根因：gui.rs gui_start_generation 里 std::thread::scope 并行跑 3 个网络任务
+#     （Overpass OSM / Overture 建筑 / 地形高程+land cover+canopy）。国内网络下
+#     overpass-api.de / overturemaps.org / 高程瓦片服务器全部被墙或超时：
+#       - fetch_result 走 Err 分支（友好，不崩）
+#       - 但 overture/ground 两个线程内部（land_cover / fetch_elevation_data /
+#         fetch_canopy_data / fetch_overture_buildings 等网络模块）可能 panic，
+#         随后 overture_handle.join().expect("Overture fetch panicked") /
+#         ground_handle.join().expect("Terrain fetch panicked") 直接 panic
+#         -> spawn_blocking 任务 panic -> tokio JoinError -> 前端报错 + 进程不稳。
+#   * 修复：join() 结果改为 match 安全处理，panic 时 emit 友好中文错误并返回
+#     Err（不再 panic、不再 abort）。生成功能在挂 VPN 后仍可正常使用。
+python3 << 'PYEOF'
+p = 'src/gui.rs'
+c = open(p).read()
+
+old = '''            let (fetch_result, overture_elements, ground) = std::thread::scope(|s| {
+                let overture_handle = s.spawn(|| {
+                    if args.overture {
+                        overture::fetch_overture_buildings(&bbox, args.scale, args.debug)
+                    } else {
+                        Vec::new()
+                    }
+                });
+                let ground_handle = s.spawn(|| ground::generate_ground_data(&args, bbox));
+                let fetch_result =
+                    retrieve_data::fetch_data_from_overpass(bbox, args.debug, "requests", None);
+                (
+                    fetch_result,
+                    overture_handle.join().expect("Overture fetch panicked"),
+                    ground_handle.join().expect("Terrain fetch panicked"),
+                )
+            });'''
+
+new = '''            let (fetch_result, overture_join, ground_join) = std::thread::scope(|s| {
+                let overture_handle = s.spawn(|| {
+                    if args.overture {
+                        overture::fetch_overture_buildings(&bbox, args.scale, args.debug)
+                    } else {
+                        Vec::new()
+                    }
+                });
+                let ground_handle = s.spawn(|| ground::generate_ground_data(&args, bbox));
+                let fetch_result =
+                    retrieve_data::fetch_data_from_overpass(bbox, args.debug, "requests", None);
+                (fetch_result, overture_handle.join(), ground_handle.join())
+            });
+            let overture_elements = match overture_join {
+                Ok(elements) => elements,
+                Err(panic_payload) => {
+                    // Android 自愈：Overture 网络任务 panic（国内网络被墙/超时）不再崩溃，
+                    // 转为友好错误提示。挂 VPN 后即可正常生成。
+                    let error_msg = format!(
+                        "Overture 建筑数据获取失败（网络被墙或超时）: {:?}",
+                        panic_payload
+                    );
+                    eprintln!("{error_msg}");
+                    emit_gui_error(&error_msg);
+                    return Err(error_msg);
+                }
+            };
+            let ground = match ground_join {
+                Ok(g) => g,
+                Err(panic_payload) => {
+                    // Android 自愈：地形/高程网络任务 panic 同样转为友好错误。
+                    let error_msg = format!(
+                        "地形/高程数据获取失败（网络被墙或超时）: {:?}",
+                        panic_payload
+                    );
+                    eprintln!("{error_msg}");
+                    emit_gui_error(&error_msg);
+                    return Err(error_msg);
+                }
+            };'''
+
+assert old in c, 'gui.rs: scope/join 块未找到（上游源码已变化？）'
+c = c.replace(old, new, 1)
+open(p, 'w').write(c)
+print('gui.rs: join().expect 已替换为安全 match（Overture/Terrain panic 不再崩溃）')
+
+# ---- 校验 ----
+print()
+print('=== 生成崩溃自愈校验 ===')
+c2 = open('src/gui.rs').read()
+print('不再有 Overture fetch panicked expect:', 'Overture fetch panicked' not in c2)
+print('不再有 Terrain fetch panicked expect:', 'Terrain fetch panicked' not in c2)
+print('含 overture_join match:', 'let overture_elements = match overture_join' in c2)
+print('含 ground_join match:', 'let ground = match ground_join' in c2)
+print('含中文错误提示:', 'Overture 建筑数据获取失败' in c2 and '地形/高程数据获取失败' in c2)
+PYEOF
