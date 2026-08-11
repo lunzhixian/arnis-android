@@ -23,7 +23,7 @@
 | **GitHub Release** | 访问 [Releases](https://github.com/lunzhixian/arnis-android/releases) 下载 `arnis-android-v3.0.0.apk` |
 | **Actions Artifact** | 打开 [Actions → Build Arnis Android APK](https://github.com/lunzhixian/arnis-android/actions) 最新成功 run → Artifacts → `arnis-android-apk`（30 天内有效） |
 
-> ⚠️ 当前 APK 使用 **debug keystore 签名**，安装时需允许"未知来源"。APK 约 **54 MB**。
+> ⚠️ 当前 APK 使用 **debug keystore 签名**，安装时需允许"未知来源"。APK 约 **62 MB**。
 
 ### 安装要求
 
@@ -65,7 +65,7 @@
 
 ### Android 适配要点（`scripts/adapt_for_android.sh`）
 
-Tauri 2 在 Android 上编译有 4 个硬性要求，脚本逐一处理：
+Tauri 2 在 Android 上编译有 6 个硬性要求，脚本逐一处理：
 
 | # | 要求 | 处理 |
 |---|------|------|
@@ -73,8 +73,12 @@ Tauri 2 在 Android 上编译有 4 个硬性要求，脚本逐一处理：
 | 2 | `Cargo.toml` 必须含 `[lib] crate-type` | 追加 `crate-type = ["staticlib", "cdylib", "rlib"]`，否则无 `libarnis.so` |
 | 3 | 必须使用 `tauri::mobile_entry_point` 宏 | 在 `run()` 前注入 `#[cfg_attr(mobile, tauri::mobile_entry_point)]`，否则 APK 缺 runtime symbols |
 | 4 | `rfd`（原生文件对话框）在 Android 无实现 | 通过 cfg 隔离禁用 |
+| 5 | Android 进程由 JNI 拉起、**无命令行参数** | `lib.rs` 打补丁：`#[cfg(target_os = "android")]` 直接 `gui::run_gui()` 并 return，跳过 clap CLI 解析（否则 `--bbox` 缺失 → `exit(2)` → 启动即闪退） |
+| 6 | Tauri CLI 移动端**不会自动**把 `frontendDist(src/gui)` 打包进 APK | workflow 的 Copy fallback 步骤显式双路径拷贝 `src/gui` → `gen/android/app/src/main/assets/`（`assets/index.html` + `assets/src/gui/index.html` 双保险），构建后 Verify 步骤校验 APK 内确实含 `index.html` 与 `libarnis.so` |
 
-> 📌 **已知坑**：Arnis 的 `tauri.conf.json` 位于仓库**根目录**（非 `src-tauri/`），因此 `cargo tauri android init` 生成的 Android 工程在 `arnis/gen/android/` 下，上传 artifact 时路径**不要**带 `src-tauri/`。
+> 📌 **已知坑**：
+> - Arnis 的 `tauri.conf.json` 位于仓库**根目录**（非 `src-tauri/`），因此 `cargo tauri android init` 生成的 Android 工程在 `arnis/gen/android/` 下，上传 artifact 时路径**不要**带 `src-tauri/`。
+> - `app.security.pattern` **没有 `"global"` 取值**（Tauri 2 只有 `brownfield` / `isolation`），配置错误会导致 `tauri android init` 的 schema 校验直接失败。本项目保持默认 `brownfield` 不变。
 
 ---
 
@@ -82,6 +86,12 @@ Tauri 2 在 Android 上编译有 4 个硬性要求，脚本逐一处理：
 
 **Q：APK 装不上？**
 A：当前是 debug 签名，需在设置中允许安装未知来源应用；正式发布建议配置 release keystore（在 workflow 的 Sign 步骤替换 keystore 即可）。
+
+**Q：启动闪退（已修复）？**
+A：早期 APK 曾因两个原因启动即闪退，均已修复并重新发布：
+1. **前端资源未打包**：Tauri CLI 移动端不会自动打包 `frontendDist`，APK 内无 `index.html`，WebView 加载失败 → 已由 workflow 手动拷贝前端资源进 assets；
+2. **CLI 参数解析崩溃**：Android 上无命令行参数，原程序走 clap 解析 `--bbox` 失败 `exit(2)` → 已由 `adapt_for_android.sh` 的 Android 入口补丁解决（直接启动 GUI）。
+若仍异常，请卸载旧版后重装最新 Release 包，并反馈 logcat 日志。
 
 **Q：生成世界时崩溃 / 内存不足？**
 A：真实世界生成是内存密集型任务，手机端建议缩小选区、降低建筑复杂度；官方也推荐移动端使用 [MapSmith](https://github.com/louis-e/MapSmith)（浏览器方案）。
