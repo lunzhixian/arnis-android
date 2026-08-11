@@ -406,6 +406,34 @@ if changed:
 else:
     print('maps.html: 无可汉化项（或已汉化）')
 
+# ---- 4.4 强制默认中文（Tauri Android WebView 的 navigator.language 不可靠）----
+# 用户实测（2026-08-11）：手机系统语言为中文，但 Tauri WebView 的
+# navigator.language 仍可能返回 "en-US" 等英文代码 -> getLocalization 回退英文。
+# 修复：无已存偏好时直接默认简体中文（用户可在语言下拉框手动切换其他语言）。
+p = 'src/gui/js/main.js'
+js = open(p).read()
+old = '''  // Otherwise use the browser's language
+  const lang = navigator.language;
+  return await fetchLanguage(lang);'''
+new = '''  // Android 自愈：Tauri WebView 的 navigator.language 即使系统是中文也可能返回
+  // "en-US" 等英文代码（用户实测），导致界面回退英文。这里直接默认简体中文，
+  // 用户可在语言下拉框手动切换其他语言。
+  return await fetchLanguage('zh-CN');'''
+assert old in js, 'main.js: getLocalization 的 navigator.language 分支未找到'
+js = js.replace(old, new, 1)
+open(p, 'w').write(js)
+print('main.js: getLocalization 已强制默认 zh-CN')
+
+# ---- 4.5 language-selector.js：语言下拉框默认值同步为 zh-CN ----
+p = 'src/gui/js/language-selector.js'
+ls = open(p).read()
+old = "const currentLang = savedLanguage || navigator.language;"
+new = "const currentLang = savedLanguage || 'zh-CN';"
+assert old in ls, 'language-selector.js: currentLang 行未找到'
+ls = ls.replace(old, new, 1)
+open(p, 'w').write(ls)
+print('language-selector.js: 下拉框默认值已改为 zh-CN')
+
 # ---- 4.4 校验 ----
 print()
 print('=== 汉化校验 ===')
@@ -414,6 +442,10 @@ js2 = open('src/gui/js/language.js').read()
 print('language.js 含 LOCALE_ALIASES:', 'LOCALE_ALIASES' in js2, '| 含 zh-CN 映射:', "'zh': 'zh-CN'" in js2)
 h2 = open('src/gui/maps.html').read()
 print('maps.html 含"搜索城市":', '搜索城市' in h2)
+mj3 = open('src/gui/js/main.js').read()
+print('main.js 默认 zh-CN:', "return await fetchLanguage('zh-CN')" in mj3)
+ls3 = open('src/gui/js/language-selector.js').read()
+print('language-selector.js 默认 zh-CN:', "savedLanguage || 'zh-CN'" in ls3)
 PYEOF
 
 # ========== 5. 启动闪退自愈：禁用自动更新检查 ==========
@@ -519,4 +551,105 @@ print('check_for_updates 含 Android 短路:', 'target_os = "android"' in c)
 print('fetch_latest_release 有 cfg 豁免:', '#[cfg(not(target_os = "android"))]' + _NL + 'pub fn fetch_latest_release' in c)
 js = open('src/gui/js/main.js').read()
 print('main.js 启动不调 checkForUpdates:', '// checkForUpdates();' in js)
+PYEOF
+
+
+# ========== 6. 地图源国产化（OSM/OpenTopoMap/Stadia 国内被墙）==========
+# 用户实测（2026-08-11）：地图页默认 OSM 瓦片在国内无法加载（白屏/无法选区域），
+# 挂外网可正常显示。替换为国内直连的高德/腾讯瓦片（Web Mercator 瓦片网格一致），
+# 保留原主题 key 以兼容 localStorage 里已保存的 'selectedTileTheme'。
+python3 << 'PYEOF'
+import re
+
+# ---- 6.1 bbox.js：整体重写 tileThemes（保留原 key，兼容已存偏好）----
+p = 'src/gui/js/bbox.js'
+js = open(p).read()
+
+new_themes = '''    var tileThemes = {
+        'osm': {
+            url: 'https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=7&x={x}&y={y}&z={z}',
+            options: {
+                attribution: '&copy; 高德地图',
+                maxZoom: 18,
+                subdomains: '1234'
+            }
+        },
+        'esri-imagery': {
+            url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+            options: {
+                attribution: 'Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community',
+                maxZoom: 18
+            }
+        },
+        'opentopomap': {
+            url: 'https://webst0{s}.is.autonavi.com/appmaptile?style=8&x={x}&y={y}&z={z}',
+            options: {
+                attribution: '&copy; 高德地图',
+                maxZoom: 18,
+                subdomains: '1234'
+            }
+        },
+        'stadia-bright': {
+            url: 'https://rt{s}.map.gtimg.com/tile?z={z}&x={x}&y={y}&styleid=1',
+            options: {
+                attribution: '&copy; 腾讯地图',
+                maxZoom: 18,
+                subdomains: '0123'
+            }
+        },
+        'stadia-dark': {
+            url: 'https://webst0{s}.is.autonavi.com/appmaptile?style=6&x={x}&y={y}&z={z}',
+            options: {
+                attribution: '&copy; 高德地图',
+                maxZoom: 18,
+                subdomains: '1234'
+            }
+        },
+        'openfreemap-liberty': {
+            url: 'https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=7&x={x}&y={y}&z={z}',
+            options: {
+                attribution: '&copy; 高德地图',
+                maxZoom: 18,
+                subdomains: '1234'
+            }
+        }
+    };'''
+
+m = re.search(r'var tileThemes = \{.*?\n    \};', js, re.S)
+assert m, 'bbox.js: tileThemes 对象未找到'
+js = js[:m.start()] + new_themes + js[m.end():]
+open(p, 'w').write(js)
+print('bbox.js: tileThemes 已替换为国内源（高德/腾讯/Esri），key 保持不变')
+
+# ---- 6.2 index.html：主题下拉框选项文本汉化 ----
+p = 'src/gui/index.html'
+h = open(p).read()
+old_opts = '''              <option value="osm">Standard</option>
+              <option value="esri-imagery">Satellite</option>
+              <option value="opentopomap">Topographic</option>
+              <option value="stadia-bright">Smooth Bright</option>
+              <option value="stadia-dark">Smooth Dark</option>
+              <option value="openfreemap-liberty">Modern</option>'''
+new_opts = '''              <option value="osm">标准地图（高德）</option>
+              <option value="esri-imagery">卫星地图（Esri）</option>
+              <option value="opentopomap">卫星+标注（高德）</option>
+              <option value="stadia-bright">街道地图（腾讯）</option>
+              <option value="stadia-dark">纯卫星（高德）</option>
+              <option value="openfreemap-liberty">标准地图（高德）</option>'''
+assert old_opts in h, 'index.html: 主题下拉框选项未找到'
+h = h.replace(old_opts, new_opts, 1)
+open(p, 'w').write(h)
+print('index.html: 主题下拉框选项已汉化')
+
+# ---- 6.3 校验 ----
+print()
+print('=== 地图源校验 ===')
+b2 = open('src/gui/js/bbox.js').read()
+print('bbox.js 含高德街道 URL:', 'webrd0{s}.is.autonavi.com' in b2)
+print('bbox.js 含高德卫星 URL:', 'webst0{s}.is.autonavi.com' in b2)
+print('bbox.js 含腾讯 URL:', 'rt{s}.map.gtimg.com' in b2)
+print('bbox.js 残留 OSM 瓦片:', 'tile.openstreetmap.org' in b2)
+print('bbox.js 残留 Stadia:', 'stadiamaps.com' in b2)
+h2 = open('src/gui/index.html').read()
+print('index.html 含"标准地图（高德）":', '标准地图（高德）' in h2)
 PYEOF
