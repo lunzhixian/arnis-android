@@ -22,21 +22,22 @@ jobs:
 
       - name: 下载 glibc 源码
         run: |
-          wget -q https://ftp.gnu.org/gnu/glibc/glibc-2.39.tar.xz
-          tar xf glibc-2.39.tar.xz
+          wget -q https://ftp.gnu.org/gnu/glibc/glibc-2.41.tar.xz
+          tar xf glibc-2.41.tar.xz
           echo "glibc 源码 OK"
 
       - name: 交叉编译 glibc (arm64)
         run: |
+          set -o pipefail
           mkdir -p build && cd build
-          ../glibc-2.39/configure \
+          ../glibc-2.41/configure \
             --host=aarch64-linux-gnu \
             --build=x86_64-linux-gnu \
             --prefix=/usr/aarch64-linux-gnu \
             --disable-werror \
             libc_cv_forced_unwind=yes \
             libc_cv_c_cleanup=yes
-          make -j$(nproc) 2>&1 | tail -10
+          make -j$(nproc) 2>&1 | tail -20
           echo "编译完成"
 
       - name: 收集产物
