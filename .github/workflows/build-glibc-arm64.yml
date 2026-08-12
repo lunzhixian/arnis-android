@@ -1,0 +1,64 @@
+name: Build glibc for arm64
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [glibc-arm64]
+
+jobs:
+  build-glibc-arm64:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 arm64 交叉编译工具链
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
+            binutils-aarch64-linux-gnu libc6-dev-arm64-cross \
+            linux-libc-dev-arm64-cross texinfo bison flex
+          aarch64-linux-gnu-gcc --version | head -1
+          echo "工具链 OK"
+
+      - name: 下载 glibc 源码
+        run: |
+          wget -q https://ftp.gnu.org/gnu/glibc/glibc-2.39.tar.xz
+          tar xf glibc-2.39.tar.xz
+          echo "glibc 源码 OK"
+
+      - name: 交叉编译 glibc (arm64)
+        run: |
+          mkdir -p build && cd build
+          ../glibc-2.39/configure \
+            --host=aarch64-linux-gnu \
+            --build=x86_64-linux-gnu \
+            --prefix=/usr/aarch64-linux-gnu \
+            --disable-werror \
+            libc_cv_forced_unwind=yes \
+            libc_cv_c_cleanup=yes
+          make -j$(nproc) 2>&1 | tail -10
+          echo "编译完成"
+
+      - name: 收集产物
+        run: |
+          mkdir -p dist
+          cp build/libc.so.6 dist/ 2>/dev/null || echo "libc.so.6 未找到"
+          cp build/ld-linux-aarch64.so.1 dist/ 2>/dev/null || true
+          cp build/ld.so.1 dist/ 2>/dev/null || true
+          cp build/libm.so.6 dist/ 2>/dev/null || true
+          cp build/libpthread.so.0 dist/ 2>/dev/null || true
+          cp build/libdl.so.2 dist/ 2>/dev/null || true
+          cp build/librt.so.1 dist/ 2>/dev/null || true
+          cp build/libresolv.so.2 dist/ 2>/dev/null || true
+          cp build/libstdc++.so.6 dist/ 2>/dev/null || true
+          cp build/libgcc_s.so.1 dist/ 2>/dev/null || true
+          cp build/libc.a dist/ 2>/dev/null || true
+          echo "=== 产物列表 ==="
+          ls -la dist/
+          file dist/*.so* 2>/dev/null || true
+
+      - name: 上传 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: glibc-arm64
+          path: dist/
