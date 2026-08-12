@@ -18,17 +18,15 @@ jobs:
             binutils-aarch64-linux-gnu libc6-dev-arm64-cross \
             linux-libc-dev-arm64-cross texinfo bison flex
           aarch64-linux-gnu-gcc --version | head -1
-          echo "工具链 OK"
 
-      - name: 下载 glibc 源码
+      - name: 下载 glibc 2.41 源码
         run: |
           wget -q https://ftp.gnu.org/gnu/glibc/glibc-2.41.tar.xz
           tar xf glibc-2.41.tar.xz
-          echo "glibc 源码 OK"
 
       - name: 交叉编译 glibc (arm64)
         run: |
-          set -o pipefail
+          set -e
           mkdir -p build && cd build
           ../glibc-2.41/configure \
             --host=aarch64-linux-gnu \
@@ -37,26 +35,19 @@ jobs:
             --disable-werror \
             libc_cv_forced_unwind=yes \
             libc_cv_c_cleanup=yes
-          make -j$(nproc) 2>&1 | tail -20
-          echo "编译完成"
+          make -j$(nproc)
 
       - name: 收集产物
         run: |
+          set -e
           mkdir -p dist
-          cp build/libc.so.6 dist/ 2>/dev/null || echo "libc.so.6 未找到"
-          cp build/ld-linux-aarch64.so.1 dist/ 2>/dev/null || true
-          cp build/ld.so.1 dist/ 2>/dev/null || true
-          cp build/libm.so.6 dist/ 2>/dev/null || true
-          cp build/libpthread.so.0 dist/ 2>/dev/null || true
-          cp build/libdl.so.2 dist/ 2>/dev/null || true
-          cp build/librt.so.1 dist/ 2>/dev/null || true
-          cp build/libresolv.so.2 dist/ 2>/dev/null || true
-          cp build/libstdc++.so.6 dist/ 2>/dev/null || true
-          cp build/libgcc_s.so.1 dist/ 2>/dev/null || true
-          cp build/libc.a dist/ 2>/dev/null || true
+          for f in libc.so.6 ld-linux-aarch64.so.1 ld.so.1 libm.so.6 \
+                   libpthread.so.0 libdl.so.2 librt.so.1 libresolv.so.2 libc.a; do
+            if [ -f "build/$f" ]; then cp "build/$f" dist/; fi
+          done
           echo "=== 产物列表 ==="
           ls -la dist/
-          file dist/*.so* 2>/dev/null || true
+          file dist/* 2>/dev/null || true
 
       - name: 上传 artifact
         uses: actions/upload-artifact@v4
